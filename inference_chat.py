@@ -113,7 +113,7 @@ def inference():
         return jsonify({"error": "Please provide input_text"}), 400
 
     inputs = tokenizer(
-        [alpaca_prompt.format('.', input_text, "")],
+        [alpaca_prompt.format('', input_text, "")],
         return_tensors="pt"
     ).to("cuda")
 
