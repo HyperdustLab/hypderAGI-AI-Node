@@ -58,7 +58,7 @@ nacos_client = nacos.NacosClient(
 )
 
 # Register service with Nacos
-service_name = "hyperAGI-inference"
+service_name = os.getenv("SERVICE_NAME", "hyperAGI-inference") 
 ip = public_ip  # Use the actual public IP address
 metadata = {"walletAddress": wallet_address}
 
@@ -120,12 +120,16 @@ def inference():
     text_streamer = TextStreamer(tokenizer)
     outputs = model.generate(**inputs, max_new_tokens=64)
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    num_output_tokens = len(tokenizer(generated_text, return_tensors="pt").input_ids[0])
+    num_input_tokens = len(tokenizer(input_text, return_tensors="pt").input_ids[0])
+    logging.info(f"Number of output tokens: {num_output_tokens}")
+    logging.info(f"Number of input tokens: {num_input_tokens}")
     
     # Extract the response part
     response_start = "### Response:\n"
     response = generated_text.split(response_start)[-1].strip()
     
-    return jsonify({"generated_text": response})
+    return jsonify({"generated_text": response,"num_output_tokens":num_output_tokens,"num_input_tokens":num_input_tokens})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
