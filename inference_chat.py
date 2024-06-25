@@ -88,14 +88,19 @@ def batch_inference():
         events = []
         for _ in range(batch_size):
             try:
-                req_data = request_queue.get(timeout=1)  # Adjust timeout based on expected traffic
+                req_data = request_queue.get(timeout=1)
             except queue.Empty:
                 break
             batch.append(req_data['data'])
             events.append(req_data['event'])
 
         if batch:
-            inputs = tokenizer([alpaca_prompt.format('.', text, "") for text in batch], return_tensors="pt").to("cuda")
+            # 在这里加入padding=True和truncation=True
+            inputs = tokenizer([alpaca_prompt.format('.', text, "") for text in batch],
+                               return_tensors="pt",
+                               padding=True,
+                               truncation=True,
+                               max_length=max_seq_length).to("cuda")
             outputs = model.generate(**inputs, max_new_tokens=64)
             responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
 
@@ -104,6 +109,7 @@ def batch_inference():
                 event.num_input_tokens = len(tokenizer(input_text, return_tensors="pt").input_ids[0])
                 event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
                 event.set()
+
 
 
 # Start batch processing thread
