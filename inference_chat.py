@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
 from unsloth import FastLanguageModel
-import torch
-from transformers import TextStreamer
 import os
 from eth_utils import is_address
 import nacos
@@ -9,6 +7,9 @@ import logging
 import time
 import queue
 import threading
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+from transformers import TextStreamer
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -69,15 +70,36 @@ def send_heartbeat():
             logging.info("Heartbeat sent successfully.")
         except Exception as e:
             logging.error(f"Failed to send heartbeat: {e}")
-        time.sleep(30)
+        time.sleep(5)
 
 # Start heartbeat thread
 heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
 heartbeat_thread.start()
 
-# Load model and tokenizer
-model, tokenizer = FastLanguageModel.from_pretrained(model_name, dtype=dtype, load_in_4bit=load_in_4bit)
-FastLanguageModel.for_inference(model)
+# # Load model and tokenizer
+# model, tokenizer = FastLanguageModel.from_pretrained(model_name, dtype=dtype, load_in_4bit=load_in_4bit)
+# FastLanguageModel.for_inference(model)
+
+
+# 设置模型参数
+model_name = "unsloth/llama-2-7b-bnb-4bit"
+adapter_name = "HyperdustProtocol/ImHyperAGI-cog-llama2-7b-5909"
+max_seq_length = 2048
+dtype = None  # 根据实际需要设置
+load_in_4bit = True
+
+# 加载预训练模型和分词器
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name=model_name,
+    max_seq_length=max_seq_length,
+    dtype=dtype,
+    load_in_4bit=load_in_4bit,
+)
+
+# 应用PEFT适配器
+model = PeftModel.from_pretrained(model, adapter_name)
+FastLanguageModel.for_inference(model)  # 启用原生2倍速推理
+
 
 # Request handling with queue and batching
 request_queue = queue.Queue()

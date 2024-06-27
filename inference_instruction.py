@@ -101,7 +101,7 @@ def batch_inference():
                                padding=True,
                                truncation=True,
                                max_length=max_seq_length).to("cuda")
-            outputs = model.generate(**inputs, max_new_tokens=64)
+            outputs = model.generate(**inputs, max_new_tokens=64,temperature=0.1,use_cache=True)
             responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
 
             for response, event, input_text in zip(responses, events, batch):
