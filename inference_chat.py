@@ -82,15 +82,18 @@ heartbeat_thread.start()
 
 
 # 设置模型参数
-model_name = "unsloth/llama-2-7b-bnb-4bit"
 adapter_name = model_name
+
+logging.info(f'Model name: {adapter_name}')
+
+
 max_seq_length = 2048
 dtype = None  # 根据实际需要设置
 load_in_4bit = True
 
 # 加载预训练模型和分词器
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=model_name,
+    model_name="unsloth/llama-2-7b-bnb-4bit",
     max_seq_length=max_seq_length,
     dtype=dtype,
     load_in_4bit=load_in_4bit,
