@@ -49,18 +49,32 @@ if not public_ip:
 # Nacos client setup
 nacos_client = nacos.NacosClient(nacos_server, namespace="", username=os.getenv("NACOS_USERNAME", ""), password=os.getenv("NACOS_PASSWORD", ""))
 
+
+# Local cache for service registration
+local_service_cache = None
+
 # Service registration with retries
 max_retries = 5
-for attempt in range(max_retries):
-    try:
-        response = nacos_client.add_naming_instance(service_name, public_ip, port, metadata={"walletAddress": wallet_address})
-        logging.info(f"Successfully registered with Nacos: {response}")
-        break
-    except Exception as e:
-        logging.error(f"Failed to register with Nacos on attempt {attempt + 1}: {e}")
-        time.sleep(5)
-else:
-    raise RuntimeError("Failed to register with Nacos after several attempts")
+
+def register_service_with_cache():
+    global local_service_cache
+    for attempt in range(max_retries):
+        try:
+            response = nacos_client.add_naming_instance(service_name, public_ip, port, metadata={"walletAddress": wallet_address})
+            logging.info(f"Successfully registered with Nacos: {response}")
+            local_service_cache = {"service_name": service_name, "public_ip": public_ip, "port": port}
+            break
+        except Exception as e:
+            logging.error(f"Failed to register with Nacos on attempt {attempt + 1}: {e}")
+            time.sleep(5)
+    else:
+        if local_service_cache:
+            logging.warning("Using cached service registration information due to Nacos unavailability.")
+        else:
+            raise RuntimeError("Failed to register with Nacos and no cache is available")
+
+register_service_with_cache()
+
 
 # Heartbeat function with improved error handling
 def send_heartbeat():
@@ -70,6 +84,7 @@ def send_heartbeat():
             logging.info("Heartbeat sent successfully.")
         except Exception as e:
             logging.error(f"Failed to send heartbeat: {e}")
+            logging.warning("Heartbeat failed, but service will continue running.")
         time.sleep(5)
 
 # Start heartbeat thread
@@ -150,7 +165,7 @@ def inference():
     event = threading.Event()
     request_queue.put({'data': input_text, 'event': event})
     event.wait()
-    
+
 
     # Extract the response part
     response_start = "### Response:\n"
