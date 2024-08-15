@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from unsloth import FastLanguageModel
 import torch
-from transformers import TextStreamer
 import os
 from eth_utils import is_address
 import nacos
@@ -15,7 +14,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Configuration and constants
 max_seq_length = 2048
-batch_size = 5
+INFER_TIMEOUT = 5  # Timeout for inference batch processing
 model_name = os.getenv("MODEL_NAME", "")
 wallet_address = os.getenv("WALLET_ADDRESS", "")
 nacos_server = os.getenv("NACOS_SERVER", "nacos.hyperagi.network:80")
@@ -46,15 +45,13 @@ if not public_ip:
     raise ValueError("PUBLIC_IP environment variable is not set or is empty")
 
 # Nacos client setup
-nacos_client = nacos.NacosClient(nacos_server, namespace="", username=os.getenv("NACOS_USERNAME", ""),
-                                 password=os.getenv("NACOS_PASSWORD", ""))
+nacos_client = nacos.NacosClient(nacos_server, namespace="", username=os.getenv("NACOS_USERNAME", ""), password=os.getenv("NACOS_PASSWORD", ""))
 
 # Service registration with retries
 max_retries = 5
 for attempt in range(max_retries):
     try:
-        response = nacos_client.add_naming_instance(service_name, public_ip, port,
-                                                    metadata={"walletAddress": wallet_address})
+        response = nacos_client.add_naming_instance(service_name, public_ip, port, metadata={"walletAddress": wallet_address})
         logging.info(f"Successfully registered with Nacos: {response}")
         break
     except Exception as e:
@@ -62,7 +59,6 @@ for attempt in range(max_retries):
         time.sleep(5)
 else:
     raise RuntimeError("Failed to register with Nacos after several attempts")
-
 
 # Heartbeat function with improved error handling
 def send_heartbeat():
@@ -74,7 +70,6 @@ def send_heartbeat():
             logging.error(f"Failed to send heartbeat: {e}")
         time.sleep(5)
 
-
 # Start heartbeat thread
 heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
 heartbeat_thread.start()
@@ -83,47 +78,43 @@ heartbeat_thread.start()
 model, tokenizer = FastLanguageModel.from_pretrained(model_name, dtype=dtype, load_in_4bit=load_in_4bit)
 FastLanguageModel.for_inference(model)
 
-# Request handling with queue and batching
+# Request handling with queue
 request_queue = queue.Queue()
-
+inference_lock = threading.Lock()
 
 def batch_inference():
     while True:
         batch = []
         events = []
-        for _ in range(batch_size):
+        start_time = time.time()
+
+        while (time.time() - start_time) < INFER_TIMEOUT:
             try:
-                req_data = request_queue.get(timeout=1)
+                req_data = request_queue.get(timeout=INFER_TIMEOUT - (time.time() - start_time))
                 batch.append(req_data['data'])
                 events.append(req_data['event'])
             except queue.Empty:
-                break
+                if batch:
+                    break
 
         if batch:
-            try:
-                inputs = tokenizer([alpaca_prompt.format(
-                    'Please generate a motion script according to the following description', text, "") for text in
-                    batch],
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=max_seq_length).to("cuda")
+            with inference_lock:
+                inputs = tokenizer([alpaca_prompt.format('Please generate a motion script according to the following description', text, "") for text in batch],
+                                   return_tensors="pt",
+                                   padding=True,
+                                   truncation=True,
+                                   max_length=max_seq_length).to("cuda")
                 outputs = model.generate(**inputs, max_new_tokens=64, temperature=0.1, use_cache=True)
                 responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
-            except Exception as e:
-                logging.error(f"Error during model inference: {e}")
-                responses = ["Error generating response"] * len(batch)
 
-            for response, event, input_text in zip(responses, events, batch):
-                event.response = response
-                event.num_input_tokens = len(tokenizer(input_text, return_tensors="pt").input_ids[0])
-                event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
-                event.set()
-
+                for response, event in zip(responses, events):
+                    event.response = response
+                    event.num_input_tokens = len(tokenizer(event.data, return_tensors="pt").input_ids[0])
+                    event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
+                    event.set()
 
 # Start batch processing thread
 threading.Thread(target=batch_inference, daemon=True).start()
-
 
 @app.route('/inference', methods=['POST'])
 def inference():
@@ -134,10 +125,7 @@ def inference():
 
     event = threading.Event()
     request_queue.put({'data': input_text, 'event': event})
-
-    # Wait for response with timeout
-    if not event.wait(timeout=30):  # 设置事件等待超时时间
-        return jsonify({"error": "Processing timeout"}), 500
+    event.wait()
 
     # Extract the response part
     response_start = "### Response:\n"
@@ -148,7 +136,6 @@ def inference():
         "num_output_tokens": event.num_output_tokens,
         "num_input_tokens": event.num_input_tokens
     })
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
