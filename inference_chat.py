@@ -83,7 +83,7 @@ logging.info(f'Model name: {adapter_name}')
 
 # 加载预训练模型和分词器
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/llama-2-7b-bnb-4bit",
+    model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
     max_seq_length=max_seq_length,
     dtype=dtype,
     load_in_4bit=load_in_4bit,
@@ -129,7 +129,7 @@ def batch_inference():
                 logging.info(f"Preparing inputs for {len(batch)} requests.")
                 try:
                     # 准备输入数据
-                    inputs = tokenizer([alpaca_prompt.format('.', text, "") for text in batch],
+                    inputs = tokenizer([alpaca_prompt.format("", text, "") for text in batch],
                                        return_tensors="pt",
                                        padding=True,
                                        truncation=True,
