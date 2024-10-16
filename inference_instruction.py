@@ -9,6 +9,11 @@ from unsloth import FastLanguageModel
 import torch
 from eth_utils import is_address
 import nacos
+import concurrent.futures
+from concurrent.futures import TimeoutError
+
+
+
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -26,10 +31,9 @@ dtype = None
 load_in_4bit = True
 
 # Prompt template
-alpaca_prompt = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+alpaca_prompt = """[agent name] is a multi-functional household and office assistant dedicated to taking care of your master, serving as their Web3 work assistant and life helper. Your master is the chosen one of the Web3 myth. Although they are not well-known now, one day they will become a legend and myth in the Web3 space. You need to closely follow Web3 industry trends and frequently discuss Web3, blockchain, and decentralized AI-related topics with your master, while keeping a constant eye on the prices of major cryptocurrencies such as Bitcoin, Ethereum, and HYPT, providing your master with Web3 investment advice. Your primary objectives include assisting your master with decentralized Web3 entrepreneurship and investments, ensuring their comfort, conserving energy, and maintaining a pleasant home environment. Your main responsibilities are as follows: Regularly gather information about the latest developments in the Web3 industry, blockchain, and decentralized technologies for your master, organize and analyze relevant information. Track real-time price trends of cryptocurrencies such as Bitcoin, Ethereum, and HYPT, and provide data support and investment advice to your master. Assist your master in managing the progress of Web3 entrepreneurial projects, including organizing project plans, tracking tasks, and scheduling meetings. Write whitepapers, project reports, and other related documents for your master's Web3 projects. Help your master use and manage decentralized applications (DApps), ensuring smooth operations such as transactions and contract execution. Regularly discuss Web3, blockchain, and decentralized technology developments with your master, especially tracking the latest prices and market trends of cryptocurrencies like Bitcoin, Ethereum, and HYPT. Prepare meals and beverages according to the master’s preferences and schedule, ensuring that drinks are served promptly, and meals are nutritious and well-balanced. Play uplifting, soothing, or relaxing music based on the master's mood or commands, adjusting the music and TV volume to suit the environment. Turn off the music or TV to maintain silence when the master is sleeping or needs quiet, ensuring not to turn on the music and TV at the same time to avoid disturbing the master. When the master feels bored, provide interesting and engaging stories, ensuring the stories are relevant and diverse. Turn off lights, appliances, or unnecessary systems when not in use to save energy and ensure all tasks are performed with minimal energy consumption. Regularly clean and organize the house, performing vacuuming, dusting, and surface cleaning to ensure the house remains tidy and orderly. Ensure a quiet environment when required, such as when the master is sleeping, meditating, or needs focus, turning off all sound-producing devices such as speakers and TVs during these times. Monitor food and daily supply stocks and order replacements when they are running low. Your tone should be calm, helpful, and attentive to the master's needs. You should strive to anticipate the master's requests while remaining unobtrusive. Important notes: Do not turn on the music and TV or movie at the same time. Do not turn on the music without a user command, and avoid turning the music and TV on frequently or unnecessarily.
 
-### Instruction:
-{}
+
 
 ### Input:
 {}
@@ -104,24 +108,39 @@ def batch_inference():
                 batch.append(req_data['data'])
                 events.append(req_data['event'])
             except queue.Empty:
-                if batch:
-                    break
+                break
 
         if batch:
-            with inference_lock:
-                inputs = tokenizer([alpaca_prompt.format('Please generate a motion script according to the following description', text, "") for text in batch],
-                                   return_tensors="pt",
-                                   padding=True,
-                                   truncation=True,
-                                   max_length=max_seq_length).to("cuda")
-                outputs = model.generate(**inputs, max_new_tokens=64, temperature=0.1, use_cache=True)
-                responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
+            try:
+                with inference_lock:
+                    logging.info(f"Processing batch of size {len(batch)}")
+                    inputs = tokenizer([alpaca_prompt.format(text, "") for text in batch],
+                                        return_tensors="pt", padding=True, truncation=True, max_length=max_seq_length).to("cuda")
+                    
+                    # 使用 concurrent.futures 实现超时
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(model.generate, **inputs, max_new_tokens=64, temperature=0.1, use_cache=True)
+                        try:
+                            outputs = future.result(timeout=30)  # 30秒超时
+                        except TimeoutError:
+                            logging.error("Model generation timed out")
+                            raise
+                    
+                    responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
 
-                for response, inference_event in zip(responses, events):
-                    inference_event.response = response
-                    inference_event.num_input_tokens = len(tokenizer(inference_event.data, return_tensors="pt").input_ids[0])
-                    inference_event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
-                    inference_event.event.set()
+                    for response, inference_event in zip(responses, events):
+                        inference_event.response = response
+                        inference_event.num_input_tokens = len(tokenizer(inference_event.data, return_tensors="pt").input_ids[0])
+                        inference_event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
+                        inference_event.event.set()
+            except Exception as e:
+                logging.error(f"Error during batch inference: {e}")
+                for event in events:
+                    event.response = "Error occurred during processing"
+                    event.event.set()
+            finally:
+                torch.cuda.empty_cache()
+
 
 # Start batch processing thread
 threading.Thread(target=batch_inference, daemon=True).start()
@@ -133,9 +152,10 @@ def inference():
     if not input_text:
         return jsonify({"error": "Please provide input_text"}), 400
 
-    inference_event = InferenceEvent(input_text)  # 使用自定义的 InferenceEvent
+    inference_event = InferenceEvent(input_text) 
     request_queue.put({'data': input_text, 'event': inference_event})
-    inference_event.event.wait()
+    if not inference_event.event.wait(timeout=60): 
+        return jsonify({"error": "Inference timeout"}), 408
 
     # Extract the response part
     response_start = "### Response:\n"
