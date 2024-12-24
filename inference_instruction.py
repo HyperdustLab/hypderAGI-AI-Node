@@ -1,5 +1,4 @@
 import threading
-import queue
 import time
 import logging
 import os
@@ -9,11 +8,9 @@ from unsloth import FastLanguageModel
 import torch
 from eth_utils import is_address
 import nacos
+from peft import PeftModel
 import concurrent.futures
 from concurrent.futures import TimeoutError
-
-
-
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -32,9 +29,6 @@ load_in_4bit = True
 
 # Prompt template
 alpaca_prompt = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
-
-
-
 
 ### Input:
 {}
@@ -93,80 +87,75 @@ heartbeat_thread.start()
 model, tokenizer = FastLanguageModel.from_pretrained(model_name, dtype=dtype, load_in_4bit=load_in_4bit)
 FastLanguageModel.for_inference(model)
 
-# Request handling with queue
-request_queue = queue.Queue()
-inference_lock = threading.Lock()
-
-def batch_inference():
-    while True:
-        batch = []
-        events = []
-        start_time = time.time()
-
-        while (time.time() - start_time) < INFER_TIMEOUT:
-            try:
-                req_data = request_queue.get(timeout=INFER_TIMEOUT - (time.time() - start_time))
-                batch.append(req_data['data'])
-                events.append(req_data['event'])
-            except queue.Empty:
-                break
-
-        if batch:
-            try:
-                with inference_lock:
-                    logging.info(f"Processing batch of size {len(batch)}")
-                    inputs = tokenizer([alpaca_prompt.format(text, "") for text in batch],
-                                        return_tensors="pt", padding=True, truncation=True, max_length=max_seq_length).to("cuda")
-                    
-                    # 使用 concurrent.futures 实现超时
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(model.generate, **inputs, max_new_tokens=64, temperature=0.1, use_cache=True)
-                        try:
-                            outputs = future.result(timeout=30)  # 30秒超时
-                        except TimeoutError:
-                            logging.error("Model generation timed out")
-                            raise
-                    
-                    responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
-
-                    for response, inference_event in zip(responses, events):
-                        inference_event.response = response
-                        inference_event.num_input_tokens = len(tokenizer(inference_event.data, return_tensors="pt").input_ids[0])
-                        inference_event.num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
-                        inference_event.event.set()
-            except Exception as e:
-                logging.error(f"Error during batch inference: {e}")
-                for event in events:
-                    event.response = "Error occurred during processing"
-                    event.event.set()
-            finally:
-                torch.cuda.empty_cache()
+def check_gpu_memory_usage():
+    """Check if GPU memory usage exceeds 95%"""
+    if torch.cuda.is_available():
+        total_memory = torch.cuda.get_device_properties(0).total_memory
+        allocated_memory = torch.cuda.memory_allocated(0)
+        memory_usage = allocated_memory / total_memory * 100
+        
+        logging.info(f"GPU memory usage: {memory_usage:.2f}%")
+        
+        if memory_usage > 95:
+            logging.warning(f"GPU memory usage exceeds 95%: {memory_usage:.2f}%")
+            return True
+    return False
 
 
-# Start batch processing thread
-threading.Thread(target=batch_inference, daemon=True).start()
+def clear_cuda_cache():
+    """Clear the GPU memory cache."""
+    logging.info("Clearing GPU memory cache.")
+    torch.cuda.empty_cache()
 
 @app.route('/inference', methods=['POST'])
 def inference():
-    data = request.json
-    input_text = data.get("input_text")
-    if not input_text:
-        return jsonify({"error": "Please provide input_text"}), 400
+    try:
+        # Check GPU memory usage before processing request
+        if check_gpu_memory_usage():
+            return jsonify({"error": "GPU memory usage exceeds 95%, unable to process the request"}), 503
+        
+        # Get request data
+        data = request.json
+        input_text = data.get("input_text")
+        if not input_text:
+            return jsonify({"error": "Please provide input_text"}), 400
 
-    inference_event = InferenceEvent(input_text) 
-    request_queue.put({'data': input_text, 'event': inference_event})
-    if not inference_event.event.wait(timeout=60): 
-        return jsonify({"error": "Inference timeout"}), 408
+        inference_event = InferenceEvent(input_text)
 
-    # Extract the response part
-    response_start = "### Response:\n"
-    response = inference_event.response.split(response_start)[-1].strip()
+        # Format the input based on the template
+        formatted_input = alpaca_prompt.format(input_text, "")
+        
+        # Tokenize input and process it using the model
+        model_input = tokenizer(formatted_input, return_tensors="pt").to(model.device)
+        
+        # Generate output
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(model.generate, **model_input, max_new_tokens=64, temperature=0.1, use_cache=True)
+            try:
+                outputs = future.result(timeout=30)  # 30 seconds timeout
+            except TimeoutError:
+                logging.error("Model generation timed out")
+                raise
+        
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response = response.split("\n")[-1].strip()
+        
+        # Calculate number of input tokens and output tokens
+        num_input_tokens = len(model_input['input_ids'][0])
+        num_output_tokens = len(outputs[0])
 
-    return jsonify({
-        "generated_text": response,
-        "num_output_tokens": inference_event.num_output_tokens,
-        "num_input_tokens": inference_event.num_input_tokens
-    })
+        # Release GPU memory after inference
+        clear_cuda_cache()
+
+        return jsonify({
+            "generated_text": response,
+            "num_input_tokens": num_input_tokens,
+            "num_output_tokens": num_output_tokens
+        })
+    
+    except Exception as e:
+        logging.error(f"Error during inference: {e}")
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

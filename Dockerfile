@@ -15,20 +15,20 @@ ENV PATH="/opt/conda/bin:$PATH"
 
 RUN conda init bash
 
+# Create a conda environment and install Python 3.10
 RUN conda create --name unsloth_env python=3.10 -y && \
     echo "conda activate unsloth_env" >> ~/.bashrc
 
+# Ensure conda environment is activated and upgrade pip
 SHELL ["conda", "run", "-n", "unsloth_env", "/bin/bash", "-c"]
 
-RUN pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" && echo "Installed unsloth" || { echo 'Failed to install unsloth'; exit 1; }
-RUN pip install --no-deps trl==0.9.4 && echo "Installed trl" || { echo 'Failed to install trl'; exit 1; }
-RUN pip install peft==0.11.1 && echo "Installed peft" || { echo 'Failed to install peft'; exit 1; }
-RUN pip install accelerate==0.31.0 && echo "Installed accelerate" || { echo 'Failed to install accelerate'; exit 1; }
-RUN pip install bitsandbytes==0.43.1 && echo "Installed bitsandbytes" || { echo 'Failed to install bitsandbytes'; exit 1; }
-RUN pip install flask==3.0.3 && echo "Installed flask" || { echo 'Failed to install flask'; exit 1; }
-RUN pip install nacos-sdk-python==0.1.14 && echo "Installed nacos-sdk-python" || { echo 'Failed to install nacos-sdk-python'; exit 1; }
-RUN pip install eth-utils==4.1.1 && echo "Installed eth-utils" || { echo 'Failed to install eth-utils'; exit 1; }
-RUN pip install xformers==0.0.26.post1 && echo "Installed xformers" || { echo 'Failed to install xformers'; exit 1; }
+RUN pip install --upgrade pip
+
+# Copy the requirements.txt file
+COPY requirements.txt /app/
+
+# Install dependencies from requirements.txt
+RUN pip install -r requirements.txt && echo "Installed dependencies" || { echo 'Failed to install dependencies'; exit 1; }
 
 COPY . .
 
