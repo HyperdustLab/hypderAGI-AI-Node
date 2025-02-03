@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import threading
+import queue
 from flask import Flask, request, jsonify
 from unsloth import FastLanguageModel
 from eth_utils import is_address
@@ -16,6 +17,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Configuration and constant
 max_seq_length = 2048
+batch_time_limit = 2  # 5 seconds request collection time
 model_name = os.getenv("MODEL_NAME", "")
 wallet_address = os.getenv("WALLET_ADDRESS", "")
 nacos_server = os.getenv("NACOS_SERVER", "nacos.hyperagi.network:80")
@@ -120,6 +122,89 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 model = PeftModel.from_pretrained(model, adapter_name)
 FastLanguageModel.for_inference(model)  # Enable native 2x speed inference
 
+# Request handling with queue and batching
+request_queue = queue.Queue()
+inference_lock = threading.Lock()
+
+
+def validate_and_clean_probs(probs):
+    """Ensure probabilities are valid by handling NaN, Inf, and negative values."""
+    if torch.any(torch.isnan(probs)):
+        logging.error("Probability tensor contains NaN values.")
+        probs = torch.nan_to_num(probs, nan=0.0)  # Convert NaN to 0
+    if torch.any(torch.isinf(probs)):
+        logging.error("Probability tensor contains Inf values.")
+        probs = torch.clamp(probs, max=1.0)  # Clamp Inf to 1.0
+    if torch.any(probs < 0):
+        logging.error("Probability tensor contains negative values.")
+        probs = torch.clamp(probs, min=0.0)  # Clamp negative values to 0
+    return probs
+
+
+def batch_inference():
+    while True:
+        with inference_lock:
+            batch = []
+            start_time = time.time()
+
+            while time.time() - start_time < batch_time_limit:
+                try:
+                    req_data = request_queue.get(timeout=1)
+                    batch.append(req_data)  # 存储完整的请求数据对象
+                except queue.Empty:
+                    continue
+
+            if batch:
+                logging.info(f"Preparing inputs for {len(batch)} requests.")
+                try:
+                    # 正确访问每个请求的数据
+                    prompts = [
+                        req['system_content'] + TEMPLATE_FORMAT.format(
+                            req['instruction'],
+                            req['data'],
+                            ""
+                        ) for req in batch
+                    ]
+                    
+                    inputs_data = tokenizer(
+                        prompts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=max_seq_length
+                    ).to("cuda")
+
+                    logging.info(f"prompts: {prompts}")
+                    
+                    # Start generating outputs
+                    inference_start_time = time.time()
+                    logging.info("Generating outputs...")
+
+                    # Model generation
+                    outputs = model.generate(**inputs_data, max_new_tokens=512)
+                    inference_end_time = time.time()
+                    logging.info(f"Outputs generated in {inference_end_time - inference_start_time:.4f} seconds.")
+
+                    # Decode responses
+                    responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
+                    logging.info("Responses generated.")
+
+                    # Record processing time for each response
+                    processing_start_time = time.time()
+                    for response, req in zip(responses, batch):
+                        req['event'].response = response
+                        req['event'].num_input_tokens = len(tokenizer(req['data'], return_tensors="pt").input_ids[0])
+                        req['event'].num_output_tokens = len(tokenizer(response, return_tensors="pt").input_ids[0])
+                        req['event'].set()
+                    processing_end_time = time.time()
+                    logging.info(f"Processed responses in {processing_end_time - processing_start_time:.4f} seconds.")
+                except Exception as e:
+                    logging.error(f"Error during batch inference: {e}", exc_info=True)
+
+
+# Start batch processing thread
+threading.Thread(target=batch_inference, daemon=True).start()
+
 
 @app.route('/inference', methods=['POST'])
 def inference():
@@ -129,64 +214,44 @@ def inference():
         input_text = data.get("input_text")
         instruction = data.get("instruction", "")
         input_data = data.get("input", "")
-        system_content = data.get("system_content", SYSTEM_PROMPT)
+        system_content = data.get("system_content", SYSTEM_PROMPT)  # 默认为 SYSTEM_PROMPT
 
         # 参数验证
         if not input_text:
             return jsonify({"error": "Please provide 'input_text'."}), 400
 
-        # 构建完整的提示文本
-        prompt = system_content + TEMPLATE_FORMAT.format(
-            instruction,
-            input_data,
-            ""
-        )
+        # 创建事件对象
+        event = threading.Event()
+        request_data = {
+            'data': input_text,
+            'instruction': instruction,
+            'input': input_data,
+            'system_content': system_content,
+            'event': event
+        }
 
-        # 将 input_text 添加到最终的提示文本中
-        prompt = prompt + "\n" + input_text
+        # 将任务放入请求队列
+        request_queue.put(request_data)
 
-        # 准备输入数据
-        inputs_data = tokenizer(
-            prompt,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_seq_length
-        ).to("cuda")
+        # 等待推理完成
+        event.wait()
 
-        logging.info(f"prompt: {prompt}")
-        
-        # 开始生成输出
-        inference_start_time = time.time()
-        logging.info("Generating output...")
-
-        # 模型生成
-        outputs = model.generate(**inputs_data, max_new_tokens=512)
-        inference_end_time = time.time()
-        logging.info(f"Output generated in {inference_end_time - inference_start_time:.4f} seconds.")
-
-        # 解码响应
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # 获取响应部分
+        # 获取生成的文本并处理
         response_start = "### Response:\n"
-        final_response = response.split(response_start)[-1].strip()
-
-        # 计算token数量
-        num_input_tokens = len(tokenizer(input_text, return_tensors="pt").input_ids[0])
-        num_output_tokens = len(tokenizer(final_response, return_tensors="pt").input_ids[0])
+        response = event.response.split(response_start)[-1].strip()
 
         # 清理 GPU 内存
         clear_cuda_cache()
 
         # 返回响应
         return jsonify({
-            "generated_text": final_response,
-            "num_output_tokens": num_output_tokens,
-            "num_input_tokens": num_input_tokens
+            "generated_text": response,
+            "num_output_tokens": event.num_output_tokens,
+            "num_input_tokens": event.num_input_tokens
         })
 
     except Exception as e:
+        # 记录错误信息
         logging.error(f"Error during inference: {e}")
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
