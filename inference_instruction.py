@@ -84,7 +84,15 @@ heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
 heartbeat_thread.start()
 
 # Load model and tokenizer
-model, tokenizer = FastLanguageModel.from_pretrained(model_name, dtype=dtype, load_in_4bit=load_in_4bit)
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name,
+    dtype=dtype,
+    load_in_4bit=load_in_4bit,
+    device_map="auto"  # 添加设备映射
+)
+
+# 确保正确设置模型为推理模式
+model.eval()  # 设置为评估模式
 FastLanguageModel.for_inference(model)
 
 def check_gpu_memory_usage():
@@ -128,13 +136,30 @@ def inference():
         # Tokenize input and process it using the model
         model_input = tokenizer(formatted_input, return_tensors="pt").to(model.device)
         
-        # Generate output
+        # Generate output with safe handling
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(model.generate, **model_input, max_new_tokens=64, temperature=0.1, use_cache=True)
             try:
-                outputs = future.result(timeout=30)  # 30 seconds timeout
-            except TimeoutError:
-                logging.error("Model generation timed out")
+                # 确保输入数据在正确的设备上
+                for key in model_input:
+                    if isinstance(model_input[key], torch.Tensor):
+                        model_input[key] = model_input[key].to(model.device)
+                
+                # 修改生成参数
+                future = executor.submit(
+                    model.generate,
+                    **model_input,
+                    max_new_tokens=64,
+                    temperature=0.1,
+                    use_cache=True,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    do_sample=False  # 改为 False 以避免采样导致的问题
+                )
+                outputs = future.result(timeout=30)
+                
+            except Exception as e:
+                logging.error(f"Generation error: {str(e)}")
+                clear_cuda_cache()
                 raise
         
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
