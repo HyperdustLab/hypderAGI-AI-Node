@@ -84,12 +84,16 @@ heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
 heartbeat_thread.start()
 
 # Load model and tokenizer
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name,
     dtype=dtype,
     load_in_4bit=load_in_4bit,
-    device_map="auto"  # 添加设备映射
+    device_map=device # 添加设备映射
 )
+
+
+model.to(device)
 
 # 确保正确设置模型为推理模式
 model.eval()  # 设置为评估模式
