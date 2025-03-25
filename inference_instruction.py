@@ -84,10 +84,16 @@ def send_heartbeat():
 # Load model and tokenizer
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 try:
+    # Add HuggingFace token configuration
+    hf_token = os.getenv("HF_TOKEN", "")  # Get token from environment variable
+    if not hf_token:
+        logging.warning("HF_TOKEN not set. Attempting to load model without token.")
+    
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
+        token=hf_token,
         device_map=device  # Add device mapping to support GPU
     )
     model.to(device)

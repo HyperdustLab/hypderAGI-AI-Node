@@ -110,12 +110,17 @@ logging.info(f'Model name: {adapter_name}')
 
 # Block until the model and tokenizer are fully loaded
 try:
+    # Add HuggingFace token configuration
+    hf_token = os.getenv("HF_TOKEN", "")  # Get token from environment variable
+    if not hf_token:
+        logging.warning("HF_TOKEN not set. Attempting to load model without token.")
     # Load pre-trained model and tokenizer
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
         max_seq_length=max_seq_length,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
+        token=hf_token,
     )
 
     # Apply PEFT adapter
