@@ -13,7 +13,7 @@ from peft import PeftModel
 from transformers import TextStreamer
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Configuration and constant
 max_seq_length = 2048
@@ -102,25 +102,39 @@ def clear_cuda_cache():
     logging.info("Clearing GPU memory cache.")
     torch.cuda.empty_cache()
 
-# Start heartbeat thread
-heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
-heartbeat_thread.start()
+
 
 # Load model and tokenizer
 adapter_name = model_name
 logging.info(f'Model name: {adapter_name}')
 
-# Load pre-trained model and tokenizer
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
-    max_seq_length=max_seq_length,
-    dtype=dtype,
-    load_in_4bit=load_in_4bit,
-)
+# Block until the model and tokenizer are fully loaded
+try:
+    # Load pre-trained model and tokenizer
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+        max_seq_length=max_seq_length,
+        dtype=dtype,
+        load_in_4bit=load_in_4bit,
+    )
 
-# Apply PEFT adapter
-model = PeftModel.from_pretrained(model, adapter_name)
-FastLanguageModel.for_inference(model)  # Enable native 2x speed inference
+    # Apply PEFT adapter
+    model = PeftModel.from_pretrained(model, adapter_name)
+    
+    # Enable native 2x speed inference
+    FastLanguageModel.for_inference(model)  
+
+    logging.info("Model loaded and ready for inference.")
+
+except Exception as e:
+    logging.error(f"Model loading failed: {str(e)}")
+    raise RuntimeError(f"Model loading failed: {str(e)}")
+
+
+# Start heartbeat thread
+heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
+heartbeat_thread.start()
+
 
 # Request handling with queue and batching
 request_queue = queue.Queue()

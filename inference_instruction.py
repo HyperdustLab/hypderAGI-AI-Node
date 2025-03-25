@@ -13,7 +13,7 @@ import concurrent.futures
 from concurrent.futures import TimeoutError
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Configuration and constants
 max_seq_length = 2048
@@ -79,25 +79,37 @@ def send_heartbeat():
             logging.error(f"Failed to send heartbeat: {e}")
         time.sleep(5)
 
-# Start heartbeat thread
-heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
-heartbeat_thread.start()
+
 
 # Load model and tokenizer
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name,
-    dtype=dtype,
-    load_in_4bit=load_in_4bit,
-    device_map=device # 添加设备映射
-)
+try:
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name,
+        dtype=dtype,
+        load_in_4bit=load_in_4bit,
+        device_map=device  # Add device mapping to support GPU
+    )
+    model.to(device)
 
+    # Ensure the model is in inference mode
+    model.eval()  # Set to evaluation mode
+    FastLanguageModel.for_inference(model)
 
-model.to(device)
+    logging.info("Model loaded and ready for inference.")
+
+except Exception as e:
+    logging.error(f"Model loading failed: {str(e)}")
+    raise RuntimeError(f"Model loading failed: {str(e)}")
 
 # 确保正确设置模型为推理模式
 model.eval()  # 设置为评估模式
 FastLanguageModel.for_inference(model)
+
+
+# Start heartbeat thread
+heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
+heartbeat_thread.start()
 
 def check_gpu_memory_usage():
     """Check if GPU memory usage exceeds 95%"""
