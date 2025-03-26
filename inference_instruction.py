@@ -11,6 +11,7 @@ import nacos
 from peft import PeftModel
 import concurrent.futures
 from concurrent.futures import TimeoutError
+from huggingface_hub import snapshot_download
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -83,23 +84,20 @@ def send_heartbeat():
 
 # Load model and tokenizer
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+local_model_dir = "/root/.cache/huggingface/"+model_name
 try:
+    snapshot_download(repo_id=model_name, local_dir=local_model_dir)
     # Add HuggingFace token configuration
     hf_token = os.getenv("HF_TOKEN", "")  # Get token from environment variable
     if not hf_token:
         logging.warning("HF_TOKEN not set. Attempting to load model without token.")
     
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name,
+        local_model_dir,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
-        token=hf_token,
-        device_map=device  # Add device mapping to support GPU
+        token=hf_token
     )
-    model.to(device)
-
-    # Ensure the model is in inference mode
-    model.eval()  # Set to evaluation mode
     FastLanguageModel.for_inference(model)
 
     logging.info("Model loaded and ready for inference.")
@@ -108,8 +106,7 @@ except Exception as e:
     logging.error(f"Model loading failed: {str(e)}")
     raise RuntimeError(f"Model loading failed: {str(e)}")
 
-# 确保正确设置模型为推理模式
-model.eval()  # 设置为评估模式
+
 FastLanguageModel.for_inference(model)
 
 
@@ -170,7 +167,7 @@ def inference():
                 future = executor.submit(
                     model.generate,
                     **model_input,
-                    max_new_tokens=64,
+                    max_new_tokens=512,
                     temperature=0.1,
                     use_cache=True,
                     pad_token_id=tokenizer.pad_token_id,

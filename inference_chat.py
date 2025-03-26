@@ -11,10 +11,11 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from transformers import TextStreamer
+from huggingface_hub import snapshot_download
+
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
-
 # Configuration and constant
 max_seq_length = 2048
 batch_time_limit = 2  # 5 seconds request collection time
@@ -52,18 +53,6 @@ if not public_ip:
 # Nacos client setup
 nacos_client = nacos.NacosClient(nacos_server, namespace="", username=os.getenv("NACOS_USERNAME", ""), password=os.getenv("NACOS_PASSWORD", ""))
 
-# Service registration with retries
-max_retries = 5
-for attempt in range(max_retries):
-    try:
-        response = nacos_client.add_naming_instance(service_name, public_ip, port, metadata={"walletAddress": wallet_address})
-        logging.info(f"Successfully registered with Nacos: {response}")
-        break
-    except Exception as e:
-        logging.error(f"Failed to register with Nacos on attempt {attempt + 1}: {e}")
-        time.sleep(5)
-else:
-    raise RuntimeError("Failed to register with Nacos after several attempts")
 
 
 def check_gpu_memory_usage():
@@ -107,16 +96,18 @@ def clear_cuda_cache():
 # Load model and tokenizer
 adapter_name = model_name
 logging.info(f'Model name: {adapter_name}')
+local_model_dir = "/root/.cache/huggingface/Meta-Llama-3.1-8B-bnb-4bit"
 
 # Block until the model and tokenizer are fully loaded
 try:
+    snapshot_download(repo_id="unsloth/Meta-Llama-3.1-8B-bnb-4bit", local_dir=local_model_dir)
     # Add HuggingFace token configuration
     hf_token = os.getenv("HF_TOKEN", "")  # Get token from environment variable
     if not hf_token:
         logging.warning("HF_TOKEN not set. Attempting to load model without token.")
     # Load pre-trained model and tokenizer
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+        model_name=local_model_dir,
         max_seq_length=max_seq_length,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
@@ -135,6 +126,18 @@ except Exception as e:
     logging.error(f"Model loading failed: {str(e)}")
     raise RuntimeError(f"Model loading failed: {str(e)}")
 
+# Service registration with retries
+max_retries = 5
+for attempt in range(max_retries):
+    try:
+        response = nacos_client.add_naming_instance(service_name, public_ip, port, metadata={"walletAddress": wallet_address})
+        logging.info(f"Successfully registered with Nacos: {response}")
+        break
+    except Exception as e:
+        logging.error(f"Failed to register with Nacos on attempt {attempt + 1}: {e}")
+        time.sleep(5)
+else:
+    raise RuntimeError("Failed to register with Nacos after several attempts")
 
 # Start heartbeat thread
 heartbeat_thread = threading.Thread(target=send_heartbeat, daemon=True)
