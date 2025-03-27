@@ -72,7 +72,6 @@ def validate_model_files(model_dir, model_type):
 
 
 def modify_adapter_config(model_dir):
-
     config_path = os.path.join(model_dir, "adapter_config.json")
     
     try:
@@ -83,7 +82,7 @@ def modify_adapter_config(model_dir):
             config = json.load(f)
             
         original_path = config.get("base_model_name_or_path", "")
-        config["base_model_name_or_path"] = BASE_MODEL_CACHE_DIR
+        config["base_model_name_or_path"] = str(BASE_MODEL_CACHE_DIR)
         logging.info(f"Updated base_model path: {original_path} -> {BASE_MODEL_CACHE_DIR}")
         
         with open(config_path, "w", encoding="utf-8") as f:
@@ -91,7 +90,7 @@ def modify_adapter_config(model_dir):
             
         with open(config_path, "r") as f:
             verified_config = json.load(f)
-            if verified_config["base_model_name_or_path"] != BASE_MODEL_CACHE_DIR:
+            if verified_config["base_model_name_or_path"] != str(BASE_MODEL_CACHE_DIR):
                 raise ValueError("Config modification failed")
                 
         logging.info("Adapter config successfully modified")
@@ -141,7 +140,7 @@ def send_heartbeat():
 
 
 
-# 带锁的智能下载（解决并发下载问题）[2,8](@ref)
+# Smart download with lock (solves concurrent download issues) [2,8](@ref)
 def safe_download(model_dir, repo_id):
     lock_file = model_dir / ".download.lock"
     
@@ -169,7 +168,7 @@ def safe_download(model_dir, repo_id):
                     raise
 
 
-# 重试装饰器（带自动清理）[2,5](@ref)
+# Retry decorator (with auto-cleanup) [2,5](@ref)
 def retry_model_load(max_retries=3):
     def decorator(func):
         def wrapper(*args, **kwargs):
@@ -191,8 +190,8 @@ def retry_model_load(max_retries=3):
 def load_local_model():
     global model, tokenizer
     try:
-        # 分步加载基础模型和适配器[2,5](@ref)
-        base_model, _ = FastLanguageModel.from_pretrained(
+        # Step-by-step loading of base model and adapter [2,5](@ref)
+        base_model,tokenizer = FastLanguageModel.from_pretrained(
             model_name=str(BASE_MODEL_CACHE_DIR),
             max_seq_length=max_seq_length,
             dtype=dtype,
@@ -227,7 +226,7 @@ def initialize_models():
         if not validate_model_files(MODEL_CACHE_DIR, "adapter"):
             safe_download(MODEL_CACHE_DIR, model_name)
 
-        modify_adapter_config(model_dir)  # 网页1
+        modify_adapter_config(MODEL_CACHE_DIR) 
         load_local_model()
 
     except Exception as e:
