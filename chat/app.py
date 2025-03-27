@@ -11,6 +11,7 @@ import nacos
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
+from pathlib import Path
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -24,13 +25,44 @@ nacos_server = os.getenv("NACOS_SERVER", "nacos.hyperagi.network:80")
 public_ip = os.getenv("PUBLIC_IP", "")
 port = int(os.getenv("PORT", 5000))
 service_name = os.getenv("SERVICE_NAME", "hyperAGI-inference-chat")
-hf_token = os.getenv("HF_TOKEN", "")
 dtype = None
 load_in_4bit = True
 
 
-MODEL_CACHE_DIR = "/models/HyperdustProtocol/ImHyperAGI-cog-llama3.1-8b-4839"
-BASE_MODEL_CACHE_DIR = "/models/unsloth/Meta-Llama-3.1-8B-bnb-4bit"
+MODEL_CACHE_DIR = "/models/HyperdustProtocol_ImHyperAGI-cog-llama3.1-8b-4839"
+BASE_MODEL_CACHE_DIR = "/models/unsloth_Meta-Llama-3.1-8B-bnb-4bit"
+
+
+
+def log_directory_structure(dir_path):
+    """记录目录结构的核心函数"""
+    try:
+        dir = Path(dir_path)
+        if not dir.exists():
+            logging.error(f"目录不存在: {dir_path}")
+            return
+
+        entries = os.listdir(dir_path)
+        logging.info(f"\n{'='*30}\n扫描目录: {dir_path}\n{'='*30}")
+        
+        # 分类记录文件和目录[1](@ref)
+        for entry in sorted(entries):
+            full_path = dir / entry
+            if full_path.is_file():
+                logging.info(f"文件: {entry} ({full_path.stat().st_size / 1024:.2f} KB)")
+            elif full_path.is_dir():
+                logging.info(f"目录: {entry}/")
+                
+    except PermissionError as e:
+        logging.error(f"权限拒绝: {dir_path} - {str(e)}")
+    except Exception as e:
+        logging.error(f"扫描失败: {dir_path} - {str(e)}")
+
+
+
+
+log_directory_structure(MODEL_CACHE_DIR)      
+log_directory_structure(BASE_MODEL_CACHE_DIR)      
 
 
 # Define fixed system prompt
@@ -84,13 +116,12 @@ def load_local_model():
     try:
         # Core loading logic (supports 4-bit quantization) [1,4](@ref)
         model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=str(BASE_MODEL_CACHE_DIR),
+            model_name=BASE_MODEL_CACHE_DIR,
             max_seq_length=max_seq_length,
             dtype=dtype,
-            load_in_4bit=load_in_4bit,
-            token=hf_token,
+            load_in_4bit=load_in_4bit
         )
-        model = PeftModel.from_pretrained(model, str(MODEL_CACHE_DIR))
+        model = PeftModel.from_pretrained(model, MODEL_CACHE_DIR)
         FastLanguageModel.for_inference(model)
         logging.info("Model loaded successfully")
     except Exception as e:

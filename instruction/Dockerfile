@@ -30,9 +30,24 @@ COPY requirements.txt /app/
 # Install dependencies from requirements.txt
 RUN pip install -r requirements.txt && echo "Installed dependencies" || { echo 'Failed to install dependencies'; exit 1; }
 
+RUN mkdir -p \
+    /models/unsloth_Meta-Llama-3.1-8B-bnb-4bit \
+    /models//HyperdustProtocol/HyperAuto-cog-llama3-8b-3407 && \
+    chmod -R 777 /models
+
+# 使用huggingface-cli执行模型下载
+RUN huggingface-cli download unsloth/Meta-Llama-3.1-8B-bnb-4bit \
+    --local-dir /models/unsloth_Meta-Llama-3.1-8B-bnb-4bit \
+    --resume-download \
+    --local-dir-use-symlinks False \ 
+    --cache-dir /tmp/hf_cache && \
+    huggingface-cli download HyperdustProtocol/HyperAuto-cog-llama3-8b-3407 \
+    --local-dir /models/HyperdustProtocol/HyperAuto-cog-llama3-8b-3407 \
+    --resume-download \
+    --local-dir-use-symlinks False \
+    --cache-dir /tmp/hf_cache
+
+
 COPY . .
 
-# Use an environment variable to specify the script to run
-ENV SCRIPT_NAME="inference.py"
-
-CMD ["sh", "-c", "conda run --no-capture-output -n unsloth_env python3 /app/${SCRIPT_NAME}"]
+CMD ["sh", "-c", "conda run --no-capture-output -n unsloth_env python3 /app/app.py"]

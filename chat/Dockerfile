@@ -30,16 +30,24 @@ COPY requirements.txt /app/
 # Install dependencies from requirements.txt
 RUN pip install -r requirements.txt && echo "Installed dependencies" || { echo 'Failed to install dependencies'; exit 1; }
 
-COPY . .
-
-
+RUN mkdir -p \
+    /models/unsloth_Meta-Llama-3.1-8B-bnb-4bit \
+    /models/HyperdustProtocol_ImHyperAGI-cog-llama3.1-8b-4839 && \
+    chmod -R 777 /models
 
 # 使用huggingface-cli执行模型下载
-RUN huggingface-cli download unsloth/Meta-Llama-3.1-8B-bnb-4bit --local-dir /models --resume-download --local-dir-use-symlinks True --cache-dir /tmp/hf_cache
+RUN huggingface-cli download unsloth/Meta-Llama-3.1-8B-bnb-4bit \
+    --local-dir /models/unsloth_Meta-Llama-3.1-8B-bnb-4bit \
+    --resume-download \
+    --local-dir-use-symlinks False \ 
+    --cache-dir /tmp/hf_cache && \
+    huggingface-cli download HyperdustProtocol/ImHyperAGI-cog-llama3.1-8b-4839 \
+    --local-dir /models/HyperdustProtocol_ImHyperAGI-cog-llama3.1-8b-4839 \
+    --resume-download \
+    --local-dir-use-symlinks False \
+    --cache-dir /tmp/hf_cache
 
-RUN huggingface-cli download HyperdustProtocol/ImHyperAGI-cog-llama3.1-8b-4839 --local-dir /models --resume-download --local-dir-use-symlinks True --cache-dir /tmp/hf_cache
 
-
-
+COPY . .
 
 CMD ["sh", "-c", "conda run --no-capture-output -n unsloth_env python3 /app/app.py"]
