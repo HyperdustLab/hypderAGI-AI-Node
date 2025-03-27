@@ -11,8 +11,6 @@ import nacos
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
-import subprocess
-import shutil
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -31,59 +29,8 @@ dtype = None
 load_in_4bit = True
 
 
-
-# Path normalization (solves path nesting issues) [1,3](@ref)
-def sanitize_model_path(name):
-    return Path("/models") / name.replace("/", "__").replace(" ", "_")
-
-MODEL_CACHE_DIR = sanitize_model_path(model_name)
-BASE_MODEL_CACHE_DIR = sanitize_model_path(base_model_name)
-
-
-# Required file list (enhances completeness verification) [1,5](@ref)
-REQUIRED_FILES = {
-    "base": ["config.json", "model.safetensors", "tokenizer.json"],
-    "adapter": ["adapter_config.json", "adapter_model.safetensors"]
-}
-
-def validate_model_files(model_dir, model_type):
-    """Enhanced file validation (supports wildcard matching) [1,6](@ref)"""
-    return all((model_dir / file).exists() for file in REQUIRED_FILES[model_type])
-
-
-
-
-
-# Smart download with lock (solves concurrent download issues) [2,8](@ref)
-def safe_download(model_dir, repo_id):
-    lock_file = model_dir / ".download.lock"
-    
-    with filelock.FileLock(lock_file, timeout=600):
-        if validate_model_files(model_dir, "base" if "Meta-Llama" in repo_id else "adapter"):
-            logging.info(f"Model {repo_id} already exists")
-            return
-
-        logging.info(f"Starting download: {repo_id}")
-        for attempt in range(3):
-            try:
-                subprocess.run([
-                    "huggingface-cli", "download", repo_id,
-                    "--local-dir", str(model_dir),
-                    "--resume-download",
-                    "--local-dir-use-symlinks", "True",
-                    "--cache-dir", "/tmp/hf_cache"
-                ], check=True)
-                (model_dir / ".download_complete").touch()
-                return
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Download attempt {attempt+1} failed: {str(e)}")
-                if attempt == 2:
-                    shutil.rmtree(model_dir, ignore_errors=True)
-                    raise
-
-
-
-
+MODEL_CACHE_DIR = "/models/HyperdustProtocol/ImHyperAGI-cog-llama3.1-8b-4839"
+BASE_MODEL_CACHE_DIR = "/models/unsloth/Meta-Llama-3.1-8B-bnb-4bit"
 
 
 # Define fixed system prompt
@@ -130,28 +77,8 @@ def check_gpu_memory_usage():
 
 
 
-# Model loading auto-repair (with retry mechanism) [4,6](@ref)
-def retry_model_load(max_retries=3):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return func(*args,**kwargs)
-                except Exception as e:
-                    logging.error(f"Model load attempt {attempt+1} failed: {str(e)}")
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(2 **attempt)
-                    shutil.rmtree(args[0], ignore_errors=True)
-                    safe_download(*args, **kwargs)
-            return None
-        return wrapper
-    return decorator
 
 
-
-
-@retry_model_load()
 def load_local_model():
     global model, tokenizer
     try:
@@ -173,16 +100,6 @@ def load_local_model():
   # Initialization process (enhances robustness) [3,8](@ref)
   
 def initialize_models():
-    MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    BASE_MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    logging.info("Checking base model...")
-    if not validate_model_files(BASE_MODEL_CACHE_DIR, "base"):
-        safe_download(BASE_MODEL_CACHE_DIR, base_model_name)
-
-    logging.info("Checking adapter model...")
-    if not validate_model_files(MODEL_CACHE_DIR, "adapter"):
-        safe_download(MODEL_CACHE_DIR, model_name)
 
     try:
         load_local_model()
