@@ -241,7 +241,6 @@ def inference():
             del inputs
         if 'outputs' in locals():
             del outputs
-        torch.cuda.empty_cache()
 
 
 if __name__ == '__main__':
