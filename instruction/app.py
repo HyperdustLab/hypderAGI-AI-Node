@@ -183,9 +183,11 @@ def check_gpu_memory_usage():
 
 
 def clear_cuda_cache():
-    """Clear the GPU memory cache."""
-    logging.info("Clearing GPU memory cache.")
-    torch.cuda.empty_cache()
+    try:
+        logging.info("Clearing GPU memory cache")
+        torch.cuda.empty_cache()
+    except RuntimeError as e:
+        logging.error(f"CUDA error occurred while clearing cache: {e}")
 
 
 @app.route('/inference', methods=['POST'])
@@ -231,7 +233,8 @@ def inference():
             response = response.split("\n")[-1].strip()
 
             # Count token usage
-            num_input_tokens = len(outputs[0]) - (outputs[0] == tokenizer.pad_token_id).sum().item()
+            num_input_tokens = len(model_input["input_ids"][0])
+
             num_output_tokens = len(outputs[0])
 
             logging.info(f"Processed {num_input_tokens} input tokens, generated {num_output_tokens} output tokens")

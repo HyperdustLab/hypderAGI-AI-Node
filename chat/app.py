@@ -177,10 +177,11 @@ heartbeat_thread.start()
 
 
 def clear_cuda_cache():
-    """Clear the GPU memory cache."""
-    logging.info("Clearing GPU memory cache.")
-    torch.cuda.empty_cache()
-
+    try:
+        logging.info("Clearing GPU memory cache")
+        torch.cuda.empty_cache()
+    except RuntimeError as e:
+        logging.error(f"CUDA error occurred while clearing cache: {e}")
 
 
 @app.route('/inference', methods=['POST'])
