@@ -187,6 +187,9 @@ def clear_cuda_cache():
 @app.route('/inference', methods=['POST'])
 def inference():
     try:
+        # Memory usage check (added threshold check)
+        if check_gpu_memory_usage():
+            return jsonify({"error": "GPU memory usage exceeds 95%, unable to process request"}), 503
         # Parameter validation (keep original logic)
         data = request.json
         input_text = data.get("input_text")
@@ -211,7 +214,7 @@ def inference():
             padding=True,
             truncation=True,
             max_length=max_seq_length
-        ).to("cuda" if torch.cuda.is_available() else "cpu")
+        ).to(model.device)
 
         # Generate response
         outputs = model.generate(**inputs, max_new_tokens=512)
@@ -235,13 +238,13 @@ def inference():
         logging.error(f"Error during inference: {e}")
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
     finally:
-        # Step 5: Strengthen GPU memory cleanup (suggested by webpage 4)
-        clear_cuda_cache()
+
         if 'inputs' in locals():
             del inputs
         if 'outputs' in locals():
             del outputs
-
+        # Step 5: Strengthen GPU memory cleanup (suggested by webpage 4)
+        clear_cuda_cache()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
